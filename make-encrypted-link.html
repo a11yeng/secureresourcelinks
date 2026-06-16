@@ -46,7 +46,7 @@
     }
 
     textarea {
-      min-height: 180px;
+      min-height: 190px;
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 0.9rem;
     }
@@ -92,18 +92,18 @@
     <h1>Encrypted Google Drive Link Generator</h1>
 
     <p class="note">
-      This does not create a clickable URL. It creates encrypted code that you paste into the
-      <code>resources</code> array in your public <code>index.html</code> file.
+      This creates a protected folder block for your <code>index.html</code> file.
+      The Google Drive link is encrypted and will not appear as the folder title.
     </p>
 
-    <label for="folderTitle">Folder Title</label>
-    <input id="folderTitle" type="text" placeholder="Example: Board Meeting Files" />
+    <label for="displayName">Display Name for Folder</label>
+    <input id="displayName" type="text" placeholder="Example: Board Meeting Files" />
 
     <label for="folderDescription">Folder Description</label>
     <input id="folderDescription" type="text" placeholder="Example: Shared documents for the board meeting." />
 
-    <label for="driveLink">Google Drive Folder Link</label>
-    <input id="driveLink" type="url" placeholder="https://drive.google.com/..." />
+    <label for="driveLink">Google Drive Folder Link to Encrypt</label>
+    <input id="driveLink" type="url" placeholder="https://drive.google.com/drive/folders/..." />
 
     <label for="passcode">Passcode</label>
     <input id="passcode" type="password" placeholder="Choose a passcode" />
@@ -111,7 +111,7 @@
     <button id="generateButton">Generate protected folder code</button>
     <button id="testButton">Test passcode</button>
 
-    <label for="output">Code to paste into index.html</label>
+    <label for="output">Code to paste into the resources array in index.html</label>
     <textarea id="output" readonly placeholder="Generated protected folder code will appear here."></textarea>
 
     <button id="copyButton">Copy code</button>
@@ -127,23 +127,29 @@
     const message = document.getElementById("message");
 
     let latestEncryptedValue = "";
+    let latestDriveLink = "";
 
     generateButton.addEventListener("click", async () => {
       message.textContent = "";
       message.className = "";
 
-      const folderTitle = document.getElementById("folderTitle").value.trim();
+      const displayName = document.getElementById("displayName").value.trim();
       const folderDescription = document.getElementById("folderDescription").value.trim();
       const driveLink = document.getElementById("driveLink").value.trim();
       const passcode = document.getElementById("passcode").value;
 
-      if (!folderTitle) {
-        showError("Please enter a folder title.");
+      if (!displayName) {
+        showError("Please enter a display name for the folder.");
+        return;
+      }
+
+      if (looksLikeUrl(displayName)) {
+        showError("The display name looks like a URL. Put a plain folder name there, and put the Google Drive link in the Google Drive Folder Link field.");
         return;
       }
 
       if (!driveLink.startsWith("https://drive.google.com/")) {
-        showError("Please enter a valid Google Drive folder link.");
+        showError("Please enter a valid Google Drive folder link in the Google Drive Folder Link field.");
         return;
       }
 
@@ -152,11 +158,12 @@
         return;
       }
 
+      latestDriveLink = driveLink;
       latestEncryptedValue = await encryptUrl(driveLink, passcode);
 
       const resourceBlock =
 `{
-  title: ${JSON.stringify(folderTitle)},
+  title: ${JSON.stringify(displayName)},
   description: ${JSON.stringify(folderDescription || "Enter the passcode to open this folder.")},
   type: "protected",
   encryptedUrl: ${JSON.stringify(latestEncryptedValue)}
@@ -164,7 +171,7 @@
 
       output.value = resourceBlock;
 
-      showSuccess("Protected folder code generated. Paste this whole block inside the resources array in index.html.");
+      showSuccess("Protected folder code generated. The Google Drive link is encrypted and only the display name will show as the title.");
     });
 
     testButton.addEventListener("click", async () => {
@@ -180,7 +187,12 @@
 
       try {
         const decryptedUrl = await decryptUrl(latestEncryptedValue, passcode);
-        showSuccess("Passcode works. It decrypts to: " + decryptedUrl);
+
+        if (decryptedUrl === latestDriveLink) {
+          showSuccess("Passcode works. The encrypted link correctly decrypts to your Google Drive folder.");
+        } else {
+          showError("The passcode worked, but the decrypted link does not match the original Drive link.");
+        }
       } catch (error) {
         showError("Test failed. The passcode does not decrypt this link.");
       }
@@ -195,6 +207,14 @@
       await navigator.clipboard.writeText(output.value);
       showSuccess("Code copied.");
     });
+
+    function looksLikeUrl(value) {
+      return (
+        value.startsWith("http://") ||
+        value.startsWith("https://") ||
+        value.includes("drive.google.com")
+      );
+    }
 
     async function encryptUrl(url, passcode) {
       const salt = crypto.getRandomValues(new Uint8Array(16));
