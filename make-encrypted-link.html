@@ -16,7 +16,7 @@
     }
 
     main {
-      max-width: 760px;
+      max-width: 800px;
       margin: 0 auto;
       background: white;
       padding: 28px;
@@ -46,11 +46,14 @@
     }
 
     textarea {
-      min-height: 150px;
+      min-height: 180px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.9rem;
     }
 
     button {
       margin-top: 18px;
+      margin-right: 8px;
       background: #2563eb;
       color: white;
       border: none;
@@ -69,6 +72,18 @@
     .note {
       color: #6b7280;
     }
+
+    .success {
+      color: #047857;
+      font-weight: 700;
+      margin-top: 14px;
+    }
+
+    .error {
+      color: #b91c1c;
+      font-weight: 700;
+      margin-top: 14px;
+    }
   </style>
 </head>
 
@@ -77,8 +92,15 @@
     <h1>Encrypted Google Drive Link Generator</h1>
 
     <p class="note">
-      Paste a Google Drive folder link and choose a passcode. This will generate an encrypted value that you can paste into your public index.html file.
+      This does not create a clickable URL. It creates encrypted code that you paste into the
+      <code>resources</code> array in your public <code>index.html</code> file.
     </p>
+
+    <label for="folderTitle">Folder Title</label>
+    <input id="folderTitle" type="text" placeholder="Example: Board Meeting Files" />
+
+    <label for="folderDescription">Folder Description</label>
+    <input id="folderDescription" type="text" placeholder="Example: Shared documents for the board meeting." />
 
     <label for="driveLink">Google Drive Folder Link</label>
     <input id="driveLink" type="url" placeholder="https://drive.google.com/..." />
@@ -86,45 +108,92 @@
     <label for="passcode">Passcode</label>
     <input id="passcode" type="password" placeholder="Choose a passcode" />
 
-    <button id="generateButton">Generate encrypted link</button>
+    <button id="generateButton">Generate protected folder code</button>
+    <button id="testButton">Test passcode</button>
 
-    <label for="output">Encrypted URL value</label>
-    <textarea id="output" readonly placeholder="Encrypted value will appear here."></textarea>
+    <label for="output">Code to paste into index.html</label>
+    <textarea id="output" readonly placeholder="Generated protected folder code will appear here."></textarea>
 
-    <button id="copyButton">Copy encrypted value</button>
+    <button id="copyButton">Copy code</button>
+
+    <div id="message" aria-live="polite"></div>
   </main>
 
   <script>
     const generateButton = document.getElementById("generateButton");
+    const testButton = document.getElementById("testButton");
     const copyButton = document.getElementById("copyButton");
     const output = document.getElementById("output");
+    const message = document.getElementById("message");
+
+    let latestEncryptedValue = "";
 
     generateButton.addEventListener("click", async () => {
+      message.textContent = "";
+      message.className = "";
+
+      const folderTitle = document.getElementById("folderTitle").value.trim();
+      const folderDescription = document.getElementById("folderDescription").value.trim();
       const driveLink = document.getElementById("driveLink").value.trim();
       const passcode = document.getElementById("passcode").value;
 
-      if (!driveLink.startsWith("https://")) {
-        alert("Please enter a valid Google Drive folder link.");
+      if (!folderTitle) {
+        showError("Please enter a folder title.");
+        return;
+      }
+
+      if (!driveLink.startsWith("https://drive.google.com/")) {
+        showError("Please enter a valid Google Drive folder link.");
         return;
       }
 
       if (passcode.length < 6) {
-        alert("Use a passcode with at least 6 characters. Longer is better.");
+        showError("Use a passcode with at least 6 characters. Longer is better.");
         return;
       }
 
-      const encryptedValue = await encryptUrl(driveLink, passcode);
-      output.value = encryptedValue;
+      latestEncryptedValue = await encryptUrl(driveLink, passcode);
+
+      const resourceBlock =
+`{
+  title: ${JSON.stringify(folderTitle)},
+  description: ${JSON.stringify(folderDescription || "Enter the passcode to open this folder.")},
+  type: "protected",
+  encryptedUrl: ${JSON.stringify(latestEncryptedValue)}
+}`;
+
+      output.value = resourceBlock;
+
+      showSuccess("Protected folder code generated. Paste this whole block inside the resources array in index.html.");
+    });
+
+    testButton.addEventListener("click", async () => {
+      message.textContent = "";
+      message.className = "";
+
+      const passcode = document.getElementById("passcode").value;
+
+      if (!latestEncryptedValue) {
+        showError("Generate protected folder code first.");
+        return;
+      }
+
+      try {
+        const decryptedUrl = await decryptUrl(latestEncryptedValue, passcode);
+        showSuccess("Passcode works. It decrypts to: " + decryptedUrl);
+      } catch (error) {
+        showError("Test failed. The passcode does not decrypt this link.");
+      }
     });
 
     copyButton.addEventListener("click", async () => {
       if (!output.value) {
-        alert("Generate an encrypted value first.");
+        showError("Generate protected folder code first.");
         return;
       }
 
       await navigator.clipboard.writeText(output.value);
-      alert("Encrypted value copied.");
+      showSuccess("Code copied.");
     });
 
     async function encryptUrl(url, passcode) {
@@ -173,6 +242,49 @@
       return btoa(JSON.stringify(payload));
     }
 
+    async function decryptUrl(encryptedPayload, passcode) {
+      const payload = JSON.parse(atob(encryptedPayload.trim()));
+
+      const salt = base64ToArrayBuffer(payload.salt);
+      const iv = base64ToArrayBuffer(payload.iv);
+      const encryptedData = base64ToArrayBuffer(payload.data);
+
+      const keyMaterial = await crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(passcode),
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+
+      const key = await crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: salt,
+          iterations: 250000,
+          hash: "SHA-256"
+        },
+        keyMaterial,
+        {
+          name: "AES-GCM",
+          length: 256
+        },
+        false,
+        ["decrypt"]
+      );
+
+      const decryptedBuffer = await crypto.subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv: iv
+        },
+        key,
+        encryptedData
+      );
+
+      return new TextDecoder().decode(decryptedBuffer);
+    }
+
     function arrayBufferToBase64(buffer) {
       const bytes = new Uint8Array(buffer);
       let binary = "";
@@ -182,6 +294,27 @@
       }
 
       return btoa(binary);
+    }
+
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+
+      return bytes.buffer;
+    }
+
+    function showSuccess(text) {
+      message.textContent = text;
+      message.className = "success";
+    }
+
+    function showError(text) {
+      message.textContent = text;
+      message.className = "error";
     }
   </script>
 </body>
